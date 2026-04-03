@@ -18,12 +18,14 @@ const AudioOverview: React.FC<AudioOverviewProps> = ({ sessionId, hasDocuments }
     setError(null);
     setLoading(true);
     try {
-      const { audioBlob, script: podcastScript } = await generateAudioOverview(sessionId);
+      // Generate audio and full script in parallel
+      const [{ audioBlob }, fullScript] = await Promise.all([
+        generateAudioOverview(sessionId),
+        getPodcastScript(sessionId),
+      ]);
       const url = URL.createObjectURL(audioBlob);
       setAudioUrl(url);
-      if (podcastScript) {
-        setScript(podcastScript + '...');
-      }
+      setScript(fullScript);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Audio generation failed';
       setError(message);

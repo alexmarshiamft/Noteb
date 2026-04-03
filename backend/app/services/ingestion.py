@@ -2,17 +2,63 @@
 Data Ingestion & Parsing Module.
 Handles parsing of various file types and sources.
 """
+import ipaddress
 import os
 import io
 import re
 import logging
+import socket
 from typing import Tuple
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _validate_url(url: str) -> None:
+    """
+    Validate that a URL is safe to fetch (SSRF protection).
+    Raises ValueError for disallowed schemes or private/internal hosts.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"URL scheme '{parsed.scheme}' is not allowed. Only http and https are permitted.")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL has no hostname.")
+
+    # Resolve hostname to IP and check for private/loopback addresses
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as exc:
+        raise ValueError(f"Could not resolve hostname '{hostname}': {exc}") from exc
+
+    for addr_info in addr_infos:
+        ip_str = addr_info[4][0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        for private_net in _PRIVATE_NETWORKS:
+            if ip_obj in private_net:
+                raise ValueError(
+                    f"Requests to private or internal addresses are not allowed (resolved to {ip_str})."
+                )
 
 
 def parse_txt(content: bytes) -> str:
@@ -74,6 +120,7 @@ def parse_pdf(content: bytes) -> str:
 
 def parse_url(url: str) -> str:
     """Scrape and extract main article text from a URL."""
+    _validate_url(url)
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -107,6 +154,7 @@ def parse_url(url: str) -> str:
 
 def parse_youtube(url: str) -> str:
     """Extract transcript and metadata from a YouTube video."""
+    _validate_url(url)
     try:
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
         import re as _re
